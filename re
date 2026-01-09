@@ -1,0 +1,197 @@
+import React, { useState, useEffect } from 'react';
+import { Plus, Trash2, ExternalLink, Loader2, Image as ImageIcon } from 'lucide-react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, collection, addDoc, onSnapshot, deleteDoc, doc } from 'firebase/firestore';
+
+// Firebase configuration
+const firebaseConfig = JSON.parse(__firebase_config);
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'minimal-ref-board-v2';
+
+const PRIMARY_COLOR = '#1738CE';
+const BG_COLOR = '#191919';
+
+const App = () => {
+  const [user, setUser] = useState(null);
+  const [url, setUrl] = useState('');
+  const [references, setReferences] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [isInitializing, setIsInitializing] = useState(true);
+
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (error) {
+        console.error("Auth error:", error);
+      } finally {
+        setIsInitializing(false);
+      }
+    };
+    initAuth();
+
+    const unsubscribe = onAuthStateChanged(auth, (u) => setUser(u));
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    const q = collection(db, 'artifacts', appId, 'users', user.uid, 'references');
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const items = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+      setReferences(items.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)));
+    }, (error) => console.error(error));
+    return () => unsubscribe();
+  }, [user]);
+
+  const handleAdd = async (e) => {
+    e.preventDefault();
+    if (!url || !user) return;
+    
+    let targetUrl = url;
+    if (!targetUrl.startsWith('http')) {
+      targetUrl = 'https://' + targetUrl;
+    }
+
+    setLoading(true);
+
+    try {
+      const domain = new URL(targetUrl).hostname;
+      // Googleのファビコンサービスを使用して、より確実にアイコンを取得
+      const iconUrl = `https://www.google.com/s2/favicons?domain=${domain}&sz=128`;
+
+      await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'references'), {
+        url: targetUrl,
+        icon: iconUrl,
+        domain: domain,
+        createdAt: Date.now()
+      });
+      setUrl('');
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const deleteItem = async (e, id) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!user) return;
+    await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'references', id));
+  };
+
+  if (isInitializing) {
+    return (
+      <div className="flex h-screen items-center justify-center" style={{ backgroundColor: BG_COLOR }}>
+        <Loader2 className="animate-spin" style={{ color: PRIMARY_COLOR }} size={24} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen text-slate-100 font-sans selection:bg-[#1738CE] selection:text-white" style={{ backgroundColor: BG_COLOR }}>
+      {/* Header */}
+      <header className="fixed top-0 left-0 w-full z-50 bg-[#191919]/80 backdrop-blur-xl border-b border-white/5">
+        <div className="max-w-[1200px] mx-auto px-6 h-14 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="w-5 h-5 rounded-full flex items-center justify-center" style={{ backgroundColor: PRIMARY_COLOR }}>
+              <div className="w-1.5 h-1.5 bg-white rounded-full" />
+            </div>
+            <span className="font-black tracking-tighter text-xs text-white">ARCHIVE</span>
+          </div>
+
+          <form onSubmit={handleAdd} className="flex-grow max-w-sm mx-4 relative">
+            <input
+              type="text"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="Paste URL..."
+              className="w-full bg-white/5 border border-white/5 rounded-full py-1.5 px-4 focus:ring-1 focus:ring-[#1738CE]/50 transition-all outline-none text-[11px] text-white placeholder:text-white/20"
+              required
+            />
+            <button
+              type="submit"
+              disabled={loading}
+              className="absolute right-1 top-1 bottom-1 px-3 rounded-full text-white transition-all disabled:opacity-50"
+              style={{ backgroundColor: PRIMARY_COLOR }}
+            >
+              {loading ? <Loader2 className="animate-spin" size={12} /> : <Plus size={14} />}
+            </button>
+          </form>
+          
+          <div className="text-[9px] text-white/30 font-mono tracking-tighter uppercase">
+            {references.length.toString().padStart(3, '0')}
+          </div>
+        </div>
+      </header>
+
+      {/* Grid */}
+      <main className="max-w-[1200px] mx-auto px-6 pt-24 pb-10">
+        <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 lg:grid-cols-10 gap-4">
+          {references.map((item) => (
+            <div key={item.id} className="relative group aspect-square">
+              <a
+                href={item.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="w-full h-full flex items-center justify-center bg-white/[0.02] rounded-xl border border-white/5 transition-all duration-300 hover:bg-white/[0.05] hover:border-[#1738CE]/30 hover:-translate-y-1"
+              >
+                <img
+                  src={item.icon}
+                  alt=""
+                  className="w-8 h-8 object-contain opacity-40 group-hover:opacity-100 transition-all duration-500 group-hover:scale-110"
+                  onError={(e) => {
+                    e.target.style.display = 'none';
+                    e.target.nextSibling.style.display = 'block';
+                  }}
+                />
+                <div className="hidden text-white/10 group-hover:text-white/30 transition-colors">
+                  <ImageIcon size={20} />
+                </div>
+              </a>
+              
+              {/* Delete Button (Visible on Hover) */}
+              <button
+                onClick={(e) => deleteItem(e, item.id)}
+                className="absolute -top-1 -right-1 p-1.5 bg-[#191919] border border-white/10 text-white/20 hover:text-red-500 rounded-full opacity-0 group-hover:opacity-100 transition-all scale-75 group-hover:scale-100 shadow-xl"
+              >
+                <Trash2 size={10} />
+              </button>
+
+              {/* Tooltip Label */}
+              <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-black/80 backdrop-blur rounded text-[8px] font-mono text-white/40 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none uppercase tracking-tighter">
+                {item.domain?.replace('www.', '')}
+              </div>
+            </div>
+          ))}
+
+          {/* Loading State */}
+          {loading && (
+            <div className="aspect-square rounded-xl bg-white/[0.01] border border-dashed border-white/5 animate-pulse flex items-center justify-center">
+              <Loader2 className="animate-spin text-white/5" size={14} />
+            </div>
+          )}
+        </div>
+
+        {references.length === 0 && !loading && (
+          <div className="flex flex-col items-center justify-center py-40 gap-3">
+            <div className="w-8 h-8 border border-dashed border-white/5 rounded-full flex items-center justify-center">
+               <Plus className="text-white/5" size={14} />
+            </div>
+            <p className="text-white/10 text-[8px] tracking-[0.4em] uppercase font-light font-mono">Archive Empty</p>
+          </div>
+        )}
+      </main>
+    </div>
+  );
+};
+
+export default App;
